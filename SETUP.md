@@ -153,6 +153,13 @@ VITE_SUPABASE_ANON_KEY=eyJhbGc...
 
 3. Sauvegarde le fichier
 
+> Si tu déploies avec GitHub Actions, ajoute aussi ces deux secrets dans ton dépôt GitHub :
+>
+> - `SUPABASE_URL`
+> - `SUPABASE_ANON_KEY`
+>
+> Tu peux les ajouter dans `Settings > Secrets and variables > Actions`.
+
 ### Étape 6: Redémarrer l'app
 
 \`\`\`bash
