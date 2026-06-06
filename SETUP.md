@@ -137,6 +137,8 @@ ON CONFLICT (id) DO NOTHING;
 1. Va dans **Settings** (roue en bas à gauche) → **API**
 2. Dans l'onglet "Project API keys", copie:
    - **Project URL** (ex: `https://xxxxx.supabase.co`)
+     - ATTENTION : ne copie pas l'URL du dashboard.
+     - Tu dois utiliser l'URL de projet qui finit par `.supabase.co`, pas une URL contenant `/dashboard/`.
    - **anon key** (la clé publique)
 
 ### Étape 5: Configurer les variables d'environnement
