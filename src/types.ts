@@ -1,6 +1,7 @@
 export type User = {
+  id: string
+  email: string
   username: string
-  password: string
 }
 
 export type Playlist = {
@@ -9,8 +10,8 @@ export type Playlist = {
   description: string
   owner: string
   members: string[]
-  inviteCode: string
-  createdAt: number
+  invite_code: string
+  created_at: string
 }
 
 export type Track = {
@@ -18,9 +19,8 @@ export type Track = {
   title: string
   filename: string
   owner: string
-  playlistId: string
-  blob: Blob
-  createdAt: number
+  playlist_id: string
+  created_at: string
 }
 
 export type AppState = {

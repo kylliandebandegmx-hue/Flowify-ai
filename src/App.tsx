@@ -1,426 +1,612 @@
-﻿import { FormEvent, useEffect, useMemo, useState } from 'react'
-import { loadDatabase, saveDatabase } from './lib/storage'
-import type { AppState, Playlist, Track } from './types'
+import { useEffect, useState, FormEvent, useMemo } from 'react'
+import { supabase } from './lib/supabase'
+import { getCurrentUser, signUp, signIn, signOut, getUserProfile } from './lib/auth'
+import {
+  getPlaylists,
+  createPlaylist,
+  joinPlaylist,
+  inviteByUsername,
+  getTracks,
+  uploadTrack,
+  getTrackUrl
+} from './lib/database'
+import type { Playlist, Track, User } from './types'
 
-const initialState: AppState = { users: [], playlists: [], tracks: [] }
-
-function generateId() {
-  return Math.random().toString(36).slice(2, 10) + Date.now().toString(36)
+interface AuthUser {
+  id: string
+  email: string
 }
 
-function generateInviteCode() {
-  return Math.random().toString(36).slice(2, 8).toUpperCase()
+interface Profile {
+  id: string
+  email: string
+  username: string
+  created_at: string
 }
 
 function App() {
-  const [appState, setAppState] = useState<AppState>(initialState)
-  const [currentUser, setCurrentUser] = useState<string | null>(null)
+  // Auth state
+  const [user, setUser] = useState<AuthUser | null>(null)
+  const [profile, setProfile] = useState<Profile | null>(null)
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login')
+  const [email, setEmail] = useState('')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
-  const [statusMessage, setStatusMessage] = useState('')
-  const [formPlaylistName, setFormPlaylistName] = useState('')
-  const [formPlaylistDescription, setFormPlaylistDescription] = useState('')
-  const [formInviteCode, setFormInviteCode] = useState('')
-  const [selectedPlaylistId, setSelectedPlaylistId] = useState('')
-  const [formInviteUsername, setFormInviteUsername] = useState('')
-  const [pendingFile, setPendingFile] = useState<File | null>(null)
+  const [message, setMessage] = useState('')
 
+  // Dashboard state
+  const [playlists, setPlaylists] = useState<Playlist[]>([])
+  const [selectedPlaylistId, setSelectedPlaylistId] = useState('')
+  const [tracks, setTracks] = useState<Track[]>([])
+  const [loading, setLoading] = useState(false)
+
+  // Form states
+  const [playlistName, setPlaylistName] = useState('')
+  const [playlistDescription, setPlaylistDescription] = useState('')
+  const [inviteCode, setInviteCode] = useState('')
+  const [inviteUsername, setInviteUsername] = useState('')
+  const [trackTitle, setTrackTitle] = useState('')
+  const [trackFile, setTrackFile] = useState<File | null>(null)
+
+  // Initialize auth
   useEffect(() => {
-    loadDatabase().then((data) => {
-      setAppState(data)
-    })
-    const storedUser = localStorage.getItem('flowify-current-user')
-    if (storedUser) {
-      setCurrentUser(storedUser)
+    const checkAuth = async () => {
+      const currentUser = await getCurrentUser()
+      if (currentUser) {
+        setUser({
+          id: currentUser.id,
+          email: currentUser.email || ''
+        })
+        // Get profile
+        const profileData = await getUserProfile(currentUser.id)
+        setProfile(profileData)
+      }
+    }
+
+    checkAuth()
+
+    // Listen for auth changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      async (event, session) => {
+        if (session?.user) {
+          setUser({
+            id: session.user.id,
+            email: session.user.email || ''
+          })
+          const profileData = await getUserProfile(session.user.id)
+          setProfile(profileData)
+        } else {
+          setUser(null)
+          setProfile(null)
+          setPlaylists([])
+          setTracks([])
+        }
+      }
+    )
+
+    return () => {
+      subscription?.unsubscribe()
     }
   }, [])
 
+  // Load playlists when user changes
   useEffect(() => {
-    saveDatabase(appState)
-  }, [appState])
+    if (user) {
+      loadPlaylists()
+    }
+  }, [user])
 
-  const accessiblePlaylists = useMemo(
-    () =>
-      appState.playlists.filter(
-        (playlist) =>
-          playlist.owner === currentUser || playlist.members.includes(currentUser ?? '')
-      ),
-    [appState.playlists, currentUser]
-  )
+  // Load tracks when selected playlist changes
+  useEffect(() => {
+    if (selectedPlaylistId && user) {
+      loadTracks()
+    }
+  }, [selectedPlaylistId, user])
+
+  const showMessage = (msg: string) => {
+    setMessage(msg)
+    setTimeout(() => setMessage(''), 3000)
+  }
+
+  const loadPlaylists = async () => {
+    if (!user) return
+    try {
+      const data = await getPlaylists(user.id)
+      setPlaylists(data)
+      if (data.length > 0 && !selectedPlaylistId) {
+        setSelectedPlaylistId(data[0].id)
+      }
+    } catch (err) {
+      showMessage('Erreur lors du chargement des playlists')
+    }
+  }
+
+  const loadTracks = async () => {
+    if (!selectedPlaylistId) return
+    try {
+      const data = await getTracks(selectedPlaylistId)
+      setTracks(data)
+    } catch (err) {
+      showMessage('Erreur lors du chargement des pistes')
+    }
+  }
+
+  const handleRegister = async (e: FormEvent) => {
+    e.preventDefault()
+    if (!email || !username || !password) {
+      showMessage('Remplis tous les champs')
+      return
+    }
+    if (password.length < 6) {
+      showMessage('Le mot de passe doit faire au moins 6 caractères')
+      return
+    }
+
+    try {
+      setLoading(true)
+      await signUp(email, password, username)
+      setEmail('')
+      setUsername('')
+      setPassword('')
+      setAuthMode('login')
+      showMessage('Compte créé ! Vérifie ton email et connecte-toi.')
+    } catch (err) {
+      showMessage(`Erreur: ${err instanceof Error ? err.message : 'Erreur inconnue'}`)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleLogin = async (e: FormEvent) => {
+    e.preventDefault()
+    if (!email || !password) {
+      showMessage('Entre ton email et ton mot de passe')
+      return
+    }
+
+    try {
+      setLoading(true)
+      await signIn(email, password)
+      setEmail('')
+      setPassword('')
+      showMessage('Connecté avec succès !')
+    } catch (err) {
+      showMessage(`Erreur: ${err instanceof Error ? err.message : 'Identifiants incorrects'}`)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleLogout = async () => {
+    try {
+      await signOut()
+      showMessage('Déconnecté')
+    } catch (err) {
+      showMessage('Erreur lors de la déconnexion')
+    }
+  }
+
+  const handleCreatePlaylist = async (e: FormEvent) => {
+    e.preventDefault()
+    if (!user || !playlistName.trim()) {
+      showMessage('Donne un nom à la playlist')
+      return
+    }
+
+    try {
+      setLoading(true)
+      const newPlaylist = await createPlaylist(
+        user.id,
+        playlistName,
+        playlistDescription
+      )
+      setPlaylistName('')
+      setPlaylistDescription('')
+      await loadPlaylists()
+      setSelectedPlaylistId(newPlaylist.id)
+      showMessage('Playlist créée !')
+    } catch (err) {
+      showMessage(`Erreur: ${err instanceof Error ? err.message : 'Erreur'}`)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleJoinPlaylist = async (e: FormEvent) => {
+    e.preventDefault()
+    if (!user || !inviteCode.trim()) {
+      showMessage('Entre un code d\'invitation')
+      return
+    }
+
+    try {
+      setLoading(true)
+      await joinPlaylist(user.id, inviteCode.toUpperCase())
+      setInviteCode('')
+      await loadPlaylists()
+      showMessage('Playlist ajoutée !')
+    } catch (err) {
+      showMessage(`Erreur: ${err instanceof Error ? err.message : 'Code invalide'}`)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleInviteUsername = async (e: FormEvent) => {
+    e.preventDefault()
+    if (!user || !selectedPlaylistId || !inviteUsername.trim()) {
+      showMessage('Remplis tous les champs')
+      return
+    }
+
+    try {
+      setLoading(true)
+      await inviteByUsername(selectedPlaylistId, inviteUsername, user.id)
+      setInviteUsername('')
+      await loadPlaylists()
+      showMessage('Utilisateur invité !')
+    } catch (err) {
+      showMessage(`Erreur: ${err instanceof Error ? err.message : 'Erreur'}`)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleUploadTrack = async (e: FormEvent) => {
+    e.preventDefault()
+    if (!user || !selectedPlaylistId || !trackTitle.trim() || !trackFile) {
+      showMessage('Remplis tous les champs et sélectionne un fichier')
+      return
+    }
+
+    try {
+      setLoading(true)
+      await uploadTrack(user.id, selectedPlaylistId, trackTitle, trackFile)
+      setTrackTitle('')
+      setTrackFile(null)
+      await loadTracks()
+      showMessage('Piste uploaddée !')
+    } catch (err) {
+      showMessage(`Erreur: ${err instanceof Error ? err.message : 'Erreur'}`)
+    } finally {
+      setLoading(false)
+    }
+  }
 
   const selectedPlaylist = useMemo(
-    () =>
-      accessiblePlaylists.find((playlist) => playlist.id === selectedPlaylistId) ||
-      accessiblePlaylists[0] ||
-      null,
-    [accessiblePlaylists, selectedPlaylistId]
+    () => playlists.find(p => p.id === selectedPlaylistId),
+    [playlists, selectedPlaylistId]
   )
 
-  useEffect(() => {
-    if (!selectedPlaylistId && accessiblePlaylists.length > 0) {
-      setSelectedPlaylistId(accessiblePlaylists[0].id)
-    }
-  }, [accessiblePlaylists, selectedPlaylistId])
+  // Auth screen
+  if (!user) {
+    return (
+      <div className="auth-container">
+        <div className="auth-box">
+          <h1>Flowify</h1>
+          <p className="subtitle">Musique collaborative en PWA</p>
 
-  const playlistTracks = useMemo(
-    () =>
-      appState.tracks.filter((track) => track.playlistId === selectedPlaylist?.id),
-    [appState.tracks, selectedPlaylist]
-  )
-
-  function showMessage(message: string) {
-    setStatusMessage(message)
-    window.setTimeout(() => setStatusMessage(''), 4000)
-  }
-
-  function registerUser(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    const trimmed = username.trim()
-    if (!trimmed || password.length < 4) {
-      showMessage('Nom d’utilisateur et mot de passe valides requis.')
-      return
-    }
-
-    if (appState.users.some((user) => user.username === trimmed)) {
-      showMessage('Ce nom existe déjà. Choisis un autre nom.')
-      return
-    }
-
-    setAppState({
-      ...appState,
-      users: [...appState.users, { username: trimmed, password }]
-    })
-    setCurrentUser(trimmed)
-    localStorage.setItem('flowify-current-user', trimmed)
-    setUsername('')
-    setPassword('')
-    showMessage('Compte créé ! Tu es connecté.')
-  }
-
-  function loginUser(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    const trimmed = username.trim()
-    const found = appState.users.find(
-      (user) => user.username === trimmed && user.password === password
-    )
-
-    if (!found) {
-      showMessage('Identifiants incorrects. Vérifie ton nom et ton mot de passe.')
-      return
-    }
-
-    setCurrentUser(trimmed)
-    localStorage.setItem('flowify-current-user', trimmed)
-    setUsername('')
-    setPassword('')
-    showMessage('Connecté avec succès.')
-  }
-
-  function logout() {
-    setCurrentUser(null)
-    localStorage.removeItem('flowify-current-user')
-    showMessage('Déconnecté.')
-  }
-
-  function createPlaylist(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    if (!currentUser) return
-    const name = formPlaylistName.trim()
-    if (!name) {
-      showMessage('Donne un nom à ta playlist.')
-      return
-    }
-
-    const newPlaylist: Playlist = {
-      id: generateId(),
-      name,
-      description: formPlaylistDescription.trim(),
-      owner: currentUser,
-      members: [],
-      inviteCode: generateInviteCode(),
-      createdAt: Date.now()
-    }
-
-    setAppState({ ...appState, playlists: [newPlaylist, ...appState.playlists] })
-    setFormPlaylistName('')
-    setFormPlaylistDescription('')
-    setSelectedPlaylistId(newPlaylist.id)
-    showMessage('Playlist créée. Tu peux maintenant inviter des amis.')
-  }
-
-  function joinPlaylistByCode(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    if (!currentUser) return
-    const code = formInviteCode.trim().toUpperCase()
-    const playlist = appState.playlists.find((item) => item.inviteCode === code)
-    if (!playlist) {
-      showMessage('Code invalide. Vérifie le code d’invitation.')
-      return
-    }
-    if (playlist.owner === currentUser || playlist.members.includes(currentUser)) {
-      showMessage('Tu fais déjà partie de cette playlist.')
-      return
-    }
-
-    setAppState({
-      ...appState,
-      playlists: appState.playlists.map((item) =>
-        item.id === playlist.id ? { ...item, members: [...item.members, currentUser] } : item
-      )
-    })
-    setFormInviteCode('')
-    setSelectedPlaylistId(playlist.id)
-    showMessage('Invitation acceptée. Tu as rejoint la playlist.')
-  }
-
-  function inviteUser(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    if (!selectedPlaylist || !currentUser) return
-    const target = formInviteUsername.trim()
-    if (!target) {
-      showMessage('Entre le nom de l’utilisateur à inviter.')
-      return
-    }
-    if (target === selectedPlaylist.owner) {
-      showMessage('Tu invites déjà le propriétaire.')
-      return
-    }
-    if (!appState.users.some((user) => user.username === target)) {
-      showMessage('Cet utilisateur n’existe pas.')
-      return
-    }
-    if (selectedPlaylist.members.includes(target)) {
-      showMessage('Cet utilisateur est déjà invité.')
-      return
-    }
-
-    setAppState({
-      ...appState,
-      playlists: appState.playlists.map((item) =>
-        item.id === selectedPlaylist.id ? { ...item, members: [...item.members, target] } : item
-      )
-    })
-    setFormInviteUsername('')
-    showMessage('Invitation envoyée à ' + target + '.')
-  }
-
-  function uploadTrack(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    if (!selectedPlaylist || !currentUser || !pendingFile) return
-
-    const nextTrack: Track = {
-      id: generateId(),
-      title: pendingFile.name,
-      filename: pendingFile.name,
-      owner: currentUser,
-      playlistId: selectedPlaylist.id,
-      blob: pendingFile,
-      createdAt: Date.now()
-    }
-
-    setAppState({ ...appState, tracks: [...appState.tracks, nextTrack] })
-    setPendingFile(null)
-    showMessage('Musique uploadée dans le cloud privé de ta playlist.')
-  }
-
-  return (
-    <div className="app-shell">
-      <header className="app-header">
-        <div>
-          <h1>Flowify AI</h1>
-          <p>Ton espace musical PWA avec playlists, invitations et audio partagé.</p>
-        </div>
-        {currentUser ? (
-          <div className="header-user">
-            <span>Bonjour, <strong>{currentUser}</strong></span>
-            <button className="secondary" onClick={logout}>Déconnexion</button>
+          <div className="auth-tabs">
+            <button
+              className={`auth-tab ${authMode === 'login' ? 'active' : ''}`}
+              onClick={() => setAuthMode('login')}
+            >
+              Connexion
+            </button>
+            <button
+              className={`auth-tab ${authMode === 'register' ? 'active' : ''}`}
+              onClick={() => setAuthMode('register')}
+            >
+              Inscription
+            </button>
           </div>
-        ) : null}
-      </header>
 
-      {!currentUser ? (
-        <main className="auth-view">
-          <section className="card auth-card">
-            <h2>{authMode === 'login' ? 'Connexion à Flowify' : 'Création de compte'}</h2>
-            <p>Connecte-toi pour créer des playlists et inviter tes amis.</p>
-            <form onSubmit={authMode === 'login' ? loginUser : registerUser} className="auth-form">
-              <label>
-                Nom d’utilisateur
+          {authMode === 'login' ? (
+            <form onSubmit={handleLogin}>
+              <div className="form-group">
+                <label htmlFor="email">Email</label>
                 <input
-                  value={username}
-                  onChange={(event) => setUsername(event.target.value)}
-                  placeholder="Ton pseudo"
-                  autoComplete="username"
+                  id="email"
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="ton@email.com"
+                  disabled={loading}
                 />
-              </label>
-              <label>
-                Mot de passe
+              </div>
+              <div className="form-group">
+                <label htmlFor="password">Mot de passe</label>
                 <input
+                  id="password"
                   type="password"
                   value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                  placeholder="Mot de passe"
-                  autoComplete={authMode === 'login' ? 'current-password' : 'new-password'}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  disabled={loading}
                 />
-              </label>
-              <button type="submit">{authMode === 'login' ? 'Se connecter' : 'Créer un compte'}</button>
-            </form>
-            <div className="auth-switch">
-              <span>{authMode === 'login' ? 'Pas encore de compte ?' : 'Déjà inscrit ?'}</span>
-              <button className="text-button" onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')}>
-                {authMode === 'login' ? 'Créer un compte' : 'Se connecter'}
+              </div>
+              <button type="submit" className="btn btn-primary" disabled={loading} style={{width: '100%'}}>
+                {loading ? 'Connexion...' : 'Se connecter'}
               </button>
+            </form>
+          ) : (
+            <form onSubmit={handleRegister}>
+              <div className="form-group">
+                <label htmlFor="reg-email">Email</label>
+                <input
+                  id="reg-email"
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="ton@email.com"
+                  disabled={loading}
+                />
+              </div>
+              <div className="form-group">
+                <label htmlFor="reg-username">Nom d'utilisateur</label>
+                <input
+                  id="reg-username"
+                  type="text"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  placeholder="ton_pseudo"
+                  disabled={loading}
+                />
+              </div>
+              <div className="form-group">
+                <label htmlFor="reg-password">Mot de passe</label>
+                <input
+                  id="reg-password"
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  disabled={loading}
+                />
+              </div>
+              <button type="submit" className="btn btn-primary" disabled={loading} style={{width: '100%'}}>
+                {loading ? 'Inscription...' : 'S\'inscrire'}
+              </button>
+            </form>
+          )}
+        </div>
+
+        {message && <div className="message">{message}</div>}
+      </div>
+    )
+  }
+
+  // Dashboard
+  return (
+    <div className="app-container">
+      {/* Sidebar */}
+      <aside className="sidebar">
+        <div className="sidebar-header">
+          <div className="sidebar-logo">♪</div>
+          <span>Flowify</span>
+        </div>
+
+        <nav className="sidebar-nav">
+          <div className="nav-section">
+            <div className="nav-section-title">Menu</div>
+            <button className="nav-item active">
+              📚 Mes Playlists
+            </button>
+            <button className="nav-item">
+              ⚙️ Paramètres
+            </button>
+          </div>
+
+          <div className="nav-section">
+            <div className="nav-section-title">Playlists</div>
+            <div className="playlist-list">
+              {playlists.map(playlist => (
+                <button
+                  key={playlist.id}
+                  className={`playlist-item ${selectedPlaylistId === playlist.id ? 'active' : ''}`}
+                  onClick={() => setSelectedPlaylistId(playlist.id)}
+                >
+                  <span className="playlist-icon"></span>
+                  <span>{playlist.name}</span>
+                </button>
+              ))}
             </div>
-          </section>
+          </div>
+        </nav>
 
-          <section className="card hero-card">
-            <h2>Une appli musicale propre et rapide</h2>
-            <p>Flowify te permet de garder tes playlists, inviter des amis et uploader tes morceaux sans backend payant.</p>
-            <ul>
-              <li>Connexion et inscription instantanées</li>
-              <li>Playlists privées et partagées</li>
-              <li>Upload audio dans le navigateur</li>
-              <li>PWA installable, rapide et hors ligne</li>
-            </ul>
-          </section>
-        </main>
-      ) : (
-        <main>
-          <section className="card welcome-card">
-            <h2>Bienvenue sur ton espace Flowify</h2>
-            <p>Crée une playlist, invite des amis et upload instantanément tes sons.</p>
-          </section>
+        <div style={{padding: '10px', borderTop: '1px solid var(--border)', marginTop: 'auto'}}>
+          <button
+            onClick={handleLogout}
+            className="btn btn-secondary"
+            style={{width: '100%', fontSize: '0.85rem'}}
+          >
+            🚪 Déconnexion
+          </button>
+        </div>
+      </aside>
 
-          <section className="grid dashboard-grid">
-            <article className="card">
-              <h3>Créer une playlist</h3>
-              <form onSubmit={createPlaylist}>
-                <label>
-                  Nom de la playlist
-                  <input
-                    value={formPlaylistName}
-                    onChange={(event) => setFormPlaylistName(event.target.value)}
-                    placeholder="Mon mix du jour"
-                  />
-                </label>
-                <label>
-                  Description
-                  <textarea
-                    rows={3}
-                    value={formPlaylistDescription}
-                    onChange={(event) => setFormPlaylistDescription(event.target.value)}
-                    placeholder="Description rapide"
-                  />
-                </label>
-                <button type="submit">Créer la playlist</button>
-              </form>
-            </article>
+      {/* Main content */}
+      <div className="main-content">
+        <header className="header">
+          <div>
+            <h2 style={{margin: 0}}>
+              {selectedPlaylist?.name || 'Flowify'}
+            </h2>
+            {profile && <p style={{margin: '5px 0 0', color: 'var(--text-secondary)', fontSize: '0.9rem'}}>
+              Connecté en tant que {profile.username}
+            </p>}
+          </div>
+          <div style={{fontSize: '0.85rem', color: 'var(--text-secondary)'}}>
+            {selectedPlaylist?.owner === user.id ? '👤 Propriétaire' : '👥 Membre'}
+          </div>
+        </header>
 
-            <article className="card">
-              <h3>Rejoindre une playlist</h3>
-              <form onSubmit={joinPlaylistByCode}>
-                <label>
-                  Code d’invitation
-                  <input
-                    value={formInviteCode}
-                    onChange={(event) => setFormInviteCode(event.target.value)}
-                    placeholder="XXXXXX"
-                  />
-                </label>
-                <button type="submit">Rejoindre</button>
-              </form>
-              <p className="info-line">Utilise le code fourni par le créateur de la playlist.</p>
-            </article>
-          </section>
+        <div className="content-area">
+          {/* Playlist actions */}
+          {selectedPlaylist && (
+            <>
+              <div className="form-container">
+                <h3 style={{marginBottom: '15px'}}>📋 Infos Playlist</h3>
+                <p><strong>{selectedPlaylist.name}</strong></p>
+                <p style={{color: 'var(--text-secondary)', fontSize: '0.9rem'}}>
+                  {selectedPlaylist.description}
+                </p>
+                <p style={{color: 'var(--text-secondary)', fontSize: '0.9rem', marginTop: '10px'}}>
+                  Code: <code style={{background: 'var(--bg-tertiary)', padding: '2px 6px', borderRadius: '4px'}}>
+                    {selectedPlaylist.invite_code}
+                  </code>
+                </p>
+              </div>
 
-          <section className="grid dashboard-grid" style={{ marginTop: '24px' }}>
-            <article className="card">
-              <h3>Mes playlists</h3>
-              {accessiblePlaylists.length === 0 ? (
-                <p>Aucune playlist pour le moment. Crée-en une ou rejoins-en.</p>
-              ) : (
-                <ul className="playlist-list">
-                  {accessiblePlaylists.map((playlist) => (
-                    <li
-                      key={playlist.id}
-                      className={`playlist-item ${selectedPlaylist?.id === playlist.id ? 'selected' : ''}`}
-                      onClick={() => setSelectedPlaylistId(playlist.id)}
-                    >
-                      <h4>{playlist.name}</h4>
-                      <p className="info-line">{playlist.description || 'Aucune description'}</p>
-                      <p className="info-line">Code : {playlist.inviteCode}</p>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </article>
-
-            <article className="card">
-              {selectedPlaylist ? (
+              {selectedPlaylist.owner === user.id && (
                 <>
-                  <h3>Playlist sélectionnée</h3>
-                  <p><strong>{selectedPlaylist.name}</strong></p>
-                  <p>{selectedPlaylist.description}</p>
-                  <p className="info-line">Propriétaire : {selectedPlaylist.owner}</p>
-                  <p className="info-line">Membres : {selectedPlaylist.members.length + 1}</p>
-                  <form onSubmit={inviteUser} style={{ marginTop: '18px' }}>
-                    <label>
-                      Inviter un utilisateur
-                      <input
-                        value={formInviteUsername}
-                        onChange={(event) => setFormInviteUsername(event.target.value)}
-                        placeholder="Pseudo invité"
-                      />
-                    </label>
-                    <button type="submit">Inviter</button>
-                  </form>
+                  {/* Invite by username */}
+                  <div className="form-container">
+                    <h3 style={{marginBottom: '15px'}}>👥 Inviter par nom</h3>
+                    <form onSubmit={handleInviteUsername}>
+                      <div className="form-group">
+                        <label htmlFor="invite-username">Nom d'utilisateur</label>
+                        <input
+                          id="invite-username"
+                          type="text"
+                          value={inviteUsername}
+                          onChange={(e) => setInviteUsername(e.target.value)}
+                          placeholder="nom_utilisateur"
+                          disabled={loading}
+                        />
+                      </div>
+                      <button type="submit" className="btn btn-primary" disabled={loading}>
+                        {loading ? 'Invitation...' : 'Inviter'}
+                      </button>
+                    </form>
+                  </div>
+
+                  {/* Upload track */}
+                  <div className="form-container">
+                    <h3 style={{marginBottom: '15px'}}>⬆️ Upload Piste</h3>
+                    <form onSubmit={handleUploadTrack}>
+                      <div className="form-group">
+                        <label htmlFor="track-title">Titre</label>
+                        <input
+                          id="track-title"
+                          type="text"
+                          value={trackTitle}
+                          onChange={(e) => setTrackTitle(e.target.value)}
+                          placeholder="Titre de la piste"
+                          disabled={loading}
+                        />
+                      </div>
+                      <div className="form-group">
+                        <label htmlFor="track-file">Fichier audio</label>
+                        <input
+                          id="track-file"
+                          type="file"
+                          accept="audio/*"
+                          onChange={(e) => setTrackFile(e.target.files?.[0] || null)}
+                          disabled={loading}
+                        />
+                      </div>
+                      <button type="submit" className="btn btn-primary" disabled={loading}>
+                        {loading ? 'Upload...' : 'Uploader'}
+                      </button>
+                    </form>
+                  </div>
                 </>
-              ) : (
-                <p>Sélectionne une playlist pour voir les détails.</p>
               )}
-            </article>
-          </section>
 
-          {selectedPlaylist ? (
-            <section className="card" style={{ marginTop: '24px' }}>
-              <h3>Upload audio</h3>
-              <p>La musique uploadée est visible par les membres invités de la playlist.</p>
-              <form onSubmit={uploadTrack}>
-                <label>
-                  Fichier audio
+              {/* Tracks */}
+              <div className="form-container">
+                <h3 style={{marginBottom: '15px'}}>🎵 Pistes ({tracks.length})</h3>
+                {tracks.length === 0 ? (
+                  <p style={{color: 'var(--text-secondary)'}}>Aucune piste pour l'instant</p>
+                ) : (
+                  <div className="track-list">
+                    {tracks.map(track => (
+                      <div key={track.id} className="track-item">
+                        <div className="track-info">
+                          <p className="track-title">{track.title}</p>
+                          <p className="track-artist">Ajoutée par {track.owner}</p>
+                        </div>
+                        <audio controls style={{maxWidth: '250px', height: '32px'}}>
+                          <source src={track.filename} type="audio/mpeg" />
+                          Ton navigateur ne supporte pas l'audio HTML5
+                        </audio>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+
+          {/* Create/Join playlist */}
+          {playlists.length === 0 && (
+            <div className="form-container">
+              <h3 style={{marginBottom: '15px'}}>🎧 Bienvenue dans Flowify !</h3>
+              <p style={{color: 'var(--text-secondary)', marginBottom: '20px'}}>
+                Crée ta première playlist ou rejoins-en une existante.
+              </p>
+            </div>
+          )}
+
+          <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px'}}>
+            {/* Create playlist */}
+            <div className="form-container">
+              <h3 style={{marginBottom: '15px'}}>➕ Créer Playlist</h3>
+              <form onSubmit={handleCreatePlaylist}>
+                <div className="form-group">
+                  <label htmlFor="playlist-name">Nom</label>
                   <input
-                    type="file"
-                    accept="audio/*"
-                    onChange={(event) => setPendingFile(event.target.files?.[0] ?? null)}
+                    id="playlist-name"
+                    type="text"
+                    value={playlistName}
+                    onChange={(e) => setPlaylistName(e.target.value)}
+                    placeholder="Ma super playlist"
+                    disabled={loading}
                   />
-                </label>
-                <button type="submit" disabled={!pendingFile}>Uploader</button>
-              </form>
-
-              {playlistTracks.length === 0 ? (
-                <p className="info-line">Aucune musique uploadée dans cette playlist.</p>
-              ) : (
-                <div className="audio-card">
-                  {playlistTracks.map((track) => (
-                    <div key={track.id} className="card audio-track-card">
-                      <h4>{track.title}</h4>
-                      <p className="info-line">Envoyé par {track.owner}</p>
-                      <audio controls src={URL.createObjectURL(track.blob)} />
-                    </div>
-                  ))}
                 </div>
-              )}
-            </section>
-          ) : null}
-        </main>
-      )}
+                <div className="form-group">
+                  <label htmlFor="playlist-desc">Description</label>
+                  <textarea
+                    id="playlist-desc"
+                    value={playlistDescription}
+                    onChange={(e) => setPlaylistDescription(e.target.value)}
+                    placeholder="Description optionnelle"
+                    disabled={loading}
+                    rows={3}
+                  />
+                </div>
+                <button type="submit" className="btn btn-primary" disabled={loading}>
+                  {loading ? 'Création...' : 'Créer'}
+                </button>
+              </form>
+            </div>
 
-      {statusMessage ? <div className="alert">{statusMessage}</div> : null}
+            {/* Join playlist */}
+            <div className="form-container">
+              <h3 style={{marginBottom: '15px'}}>🔗 Rejoindre</h3>
+              <form onSubmit={handleJoinPlaylist}>
+                <div className="form-group">
+                  <label htmlFor="invite-code">Code d'invitation</label>
+                  <input
+                    id="invite-code"
+                    type="text"
+                    value={inviteCode}
+                    onChange={(e) => setInviteCode(e.target.value)}
+                    placeholder="Ex: ABC123"
+                    disabled={loading}
+                  />
+                </div>
+                <button type="submit" className="btn btn-primary" disabled={loading}>
+                  {loading ? 'Rejointe...' : 'Rejoindre'}
+                </button>
+              </form>
+            </div>
+          </div>
+        </div>
+      </div>
 
-      <footer>
-        <p>Flowify AI — PWA de musique locale avec partage de playlists et stockage audio.</p>
-      </footer>
+      {message && <div className="message">{message}</div>}
     </div>
   )
 }
