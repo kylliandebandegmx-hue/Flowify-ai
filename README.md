@@ -34,6 +34,20 @@ Le site sera disponible ici :
 
 https://kylliandebandegmx-hue.github.io/Flowify-ai/
 
+### Variables d'environnement pour le déploiement
+
+Pour que le build en production sache utiliser Supabase, ajoute ces secrets dans GitHub :
+
+- `SUPABASE_URL`
+- `SUPABASE_ANON_KEY`
+
+Dans le workflow GitHub Pages, ces secrets sont injectés en tant que :
+
+- `VITE_SUPABASE_URL`
+- `VITE_SUPABASE_ANON_KEY`
+
+Ne commite jamais ta clé `service_role`, utilise seulement la clé publique `anon`.
+
 ## Notes sur le stockage
 
 - Les fichiers audio sont actuellement conservés dans le navigateur via IndexedDB / LocalForage.
