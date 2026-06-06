@@ -125,20 +125,8 @@ INSERT INTO storage.buckets (id, name, public)
 VALUES ('tracks', 'tracks', true)
 ON CONFLICT (id) DO NOTHING;
 
--- RLS pour le storage
-ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
-
-CREATE POLICY "Tous peuvent voir les tracks"
-  ON storage.objects FOR SELECT
-  USING (bucket_id = 'tracks');
-
-CREATE POLICY "Uploader dans tracks"
-  ON storage.objects FOR INSERT
-  WITH CHECK (bucket_id = 'tracks');
-
-CREATE POLICY "Supprimer sa track"
-  ON storage.objects FOR DELETE
-  USING (bucket_id = 'tracks' AND auth.uid()::text = (storage.foldername(name))[1]);
+-- Note: La gestion des permissions du stockage Supabase se fait depuis le tableau de bord Storage.
+-- Ne tente pas d'exécuter ALTER TABLE sur storage.objects, car cette table appartient au système et n'est pas modifiable par SQL dans Supabase.
 \`\`\`
 
 4. Clique sur "Run" (ou Ctrl+Enter)
