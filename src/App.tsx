@@ -1,5 +1,5 @@
 import { useEffect, useState, FormEvent, useMemo } from 'react'
-import { supabase } from './lib/supabase'
+import { ensureSupabase } from './lib/supabase'
 import { getCurrentUser, signUp, signIn, signOut, getUserProfile } from './lib/auth'
 import {
   getPlaylists,
@@ -51,23 +51,31 @@ function App() {
   // Initialize auth
   useEffect(() => {
     const checkAuth = async () => {
-      const currentUser = await getCurrentUser()
-      if (currentUser) {
-        setUser({
-          id: currentUser.id,
-          email: currentUser.email || ''
-        })
-        // Get profile
-        const profileData = await getUserProfile(currentUser.id)
-        setProfile(profileData)
+      try {
+        const currentUser = await getCurrentUser()
+        if (currentUser) {
+          setUser({
+            id: currentUser.id,
+            email: currentUser.email || ''
+          })
+          // Get profile
+          const profileData = await getUserProfile(currentUser.id)
+          setProfile(profileData)
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Erreur Auth Supabase'
+        showMessage(message)
       }
     }
 
     checkAuth()
 
-    // Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
+    let subscription: any = null
+    try {
+      const client = ensureSupabase()
+      const {
+        data: { subscription: authSubscription }
+      } = client.auth.onAuthStateChange(async (event, session) => {
         if (session?.user) {
           setUser({
             id: session.user.id,
@@ -81,8 +89,13 @@ function App() {
           setPlaylists([])
           setTracks([])
         }
-      }
-    )
+      })
+      subscription = authSubscription
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Supabase non configuré'
+      console.warn(message)
+      showMessage(message)
+    }
 
     return () => {
       subscription?.unsubscribe()

@@ -1,7 +1,8 @@
-import { supabase } from './supabase'
+import { ensureSupabase } from './supabase'
 import type { Playlist, Track } from '../types'
 
 export async function getPlaylists(userId: string) {
+  const supabase = ensureSupabase()
   const { data, error } = await supabase
     .from('playlists')
     .select('*')
@@ -18,6 +19,7 @@ export async function createPlaylist(
 ) {
   const inviteCode = Math.random().toString(36).slice(2, 8).toUpperCase()
 
+  const supabase = ensureSupabase()
   const { data, error } = await supabase
     .from('playlists')
     .insert([
@@ -37,6 +39,7 @@ export async function createPlaylist(
 }
 
 export async function joinPlaylist(userId: string, inviteCode: string) {
+  const supabase = ensureSupabase()
   const { data: playlist, error: fetchError } = await supabase
     .from('playlists')
     .select('*')
@@ -61,6 +64,7 @@ export async function joinPlaylist(userId: string, inviteCode: string) {
 
 export async function inviteByUsername(playlistId: string, username: string, userId: string) {
   // Get the profile with username
+  const supabase = ensureSupabase()
   const { data: profile, error: profileError } = await supabase
     .from('profiles')
     .select('id')
@@ -98,6 +102,7 @@ export async function inviteByUsername(playlistId: string, username: string, use
 }
 
 export async function getTracks(playlistId: string) {
+  const supabase = ensureSupabase()
   const { data, error } = await supabase
     .from('tracks')
     .select('*')
@@ -114,6 +119,7 @@ export async function uploadTrack(
   title: string,
   file: File
 ) {
+  const supabase = ensureSupabase()
   // Upload file to storage
   const filename = `${playlistId}/${Date.now()}-${file.name}`
   const { error: uploadError } = await supabase.storage
@@ -141,11 +147,13 @@ export async function uploadTrack(
 }
 
 export async function getTrackUrl(filename: string) {
+  const supabase = ensureSupabase()
   const { data } = supabase.storage.from('tracks').getPublicUrl(filename)
   return data.publicUrl
 }
 
 export async function deleteTrack(trackId: string) {
+  const supabase = ensureSupabase()
   const { error } = await supabase.from('tracks').delete().eq('id', trackId)
   if (error) throw error
 }
